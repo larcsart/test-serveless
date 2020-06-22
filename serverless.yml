@@ -1,0 +1,140 @@
+service: sunflowers
+app: sunflower
+org: larcsart
+
+provider:
+  name: aws
+  runtime: nodejs10.x
+  # Permission to lambda function
+  iamRoleStatements:
+    - Effect: 'Allow'
+      Action:
+        - sqs:SendMessage
+      Resource:
+        # Return an attribute from a resource
+        Fn::GetAtt:
+          - LogsQueue
+          - Arn
+    - Effect: 'Allow'
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+      Resource:
+        - Fn::GetAtt:
+            - LogsTable
+            - Arn
+        - Fn::Join:
+            - '/'
+            - - Fn::GetAtt:
+                  - LogsTable
+                  - Arn
+              - 'index'
+              - 'typeIndex'
+
+functions:
+  createLog:
+    handler: src/createLog.handler
+    events:
+      # Create API Gateway
+      - http:
+          path: create_log_entry
+          method: post
+          request:
+            # Using JSON-Schema to validade request
+            schema:
+              application/json: ${file(schemas/log.json)}
+            # TODO: Catching Exceptions In Your Lambda Function
+    environment:
+      # Set process.env.SQS_URL as reference from SQS Resource
+      SQS_URL:
+        Ref: LogsQueue
+
+  saveLog:
+    handler: src/saveLog.handler
+    events:
+      - sqs:
+          # effects how many SQS messages will be included in a single Lambda invocation.
+          batchSize: 1
+          arn:
+            Fn::GetAtt:
+              - LogsQueue
+              - Arn
+          enable: true
+    environment:
+      # Set process.env.SQS_URL as reference from SQS Resource
+      DynamoDB_URL:
+        Ref: LogsTable
+
+  getLogByOrigin:
+    handler: src/getLogByOrigin.handler
+    events:
+      - http:
+          path: get_logs_by_origin
+          method: get
+          request:
+            parameters:
+              # Pass optional and required parameters
+              querystrings:
+                origin: true
+    environment:
+      # Set process.env.SQS_URL as reference from SQS Resource
+      DynamoDB_URL:
+        Ref: LogsTable
+
+  getLogByType:
+    handler: src/getLogByType.handler
+    events:
+      - http:
+          path: get_logs_by_type
+          method: get
+          request:
+            parameters:
+              # Pass optional and required parameters
+              querystrings:
+                type: true
+    environment:
+      # Set process.env.SQS_URL as reference from SQS Resource
+      DynamoDB_URL:
+        Ref: LogsTable
+
+resources:
+  Resources:
+    # Create SQS Resource
+    LogsQueue:
+      Type: 'AWS::SQS::Queue'
+      Properties:
+        QueueName: 'LogsQueue'
+    # Create DynamoDB Resource
+    LogsTable:
+      Type: 'AWS::DynamoDB::Table'
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: origin
+            AttributeType: S
+          - AttributeName: type
+            AttributeType: S
+          - AttributeName: timestamp
+            AttributeType: N
+        KeySchema:
+          - AttributeName: origin
+            KeyType: HASH
+          - AttributeName: timestamp
+            KeyType: RANGE
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        TableName: 'LogsTable'
+        GlobalSecondaryIndexes:
+          - IndexName: typeIndex
+            KeySchema:
+              - AttributeName: type
+                KeyType: HASH
+              - AttributeName: timestamp
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+            ProvisionedThroughput:
+              ReadCapacityUnits: 1
+              WriteCapacityUnits: 1
